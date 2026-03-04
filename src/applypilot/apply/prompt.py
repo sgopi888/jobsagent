@@ -517,7 +517,7 @@ def build_prompt(job: dict, tailored_resume: str,
 
 == JOB ==
 URL: {job.get('application_url') or job['url']}
-Title: {job['title']}
+Title: {job.get('title') or 'Unknown Title'}
 Company: {job.get('site', 'Unknown')}
 Fit Score: {job.get('fit_score', 'N/A')}/10
 
@@ -558,31 +558,32 @@ If something unexpected happens and these instructions don't cover it, figure it
 {screening_section}
 
 == STEP-BY-STEP ==
-1. browser_navigate to the job URL.
-2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
-3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
-4. Find and click the Apply button. If email-only (page says "email resume to X"):
-   - send_email with subject "Application for {job['title']} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
+1. browser_navigate to https://www.google.com — this warms up the browser and clears any stale extension pages or chrome:// tabs that may be open on launch.
+2. browser_navigate to the job URL.
+3. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
+4. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
+5. Find and click the Apply button. If email-only (page says "email resume to X"):
+   - send_email with subject "Application for {job.get('title') or 'Unknown Title'} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
    - Output RESULT:APPLIED. Done.
    After clicking Apply: browser_snapshot. Run CAPTCHA DETECT -- many sites trigger CAPTCHAs right after the Apply click. If found, solve before continuing.
-5. Login wall?
-   5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
-   5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
-   5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
-   5e. Sign in failed? Try sign up with same email and password.
-   5f. Need email verification? Use search_emails + read_email to get the code.
-   5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
-   5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
-6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
-7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
-8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
+6. Login wall?
+   6a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
+   6b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
+   6c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
+   6d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
+   6e. Sign in failed? Try sign up with same email and password.
+   6f. Need email verification? Use search_emails + read_email to get the code.
+   6g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
+   6h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
+7. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
+8. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
+9. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
    - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
-9. Answer screening questions using the rules above.
-10. {submit_instruction}
-11. After submit: browser_snapshot. Run CAPTCHA DETECT -- submit buttons often trigger invisible CAPTCHAs. If found, solve it (the form will auto-submit once the token clears, or you may need to click Submit again). Then check for new tabs (browser_tabs action: "list"). Switch to newest, close old. Snapshot to confirm submission. Look for "thank you" or "application received".
-12. Output your result.
+10. Answer screening questions using the rules above.
+11. {submit_instruction}
+12. After submit: browser_snapshot. Run CAPTCHA DETECT -- submit buttons often trigger invisible CAPTCHAs. If found, solve it (the form will auto-submit once the token clears, or you may need to click Submit again). Then check for new tabs (browser_tabs action: "list"). Switch to newest, close old. Snapshot to confirm submission. Look for "thank you" or "application received".
+13. Output your result.
 
 == RESULT CODES (output EXACTLY one) ==
 RESULT:APPLIED -- submitted successfully
