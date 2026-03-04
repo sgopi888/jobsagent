@@ -149,7 +149,7 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
 
         log.info(
             "[%d/%d] score=%d  %s",
-            completed, len(jobs), result["score"], job.get("title", "?")[:60],
+            completed, len(jobs), result["score"], (job.get("title") or "?")[:60],
         )
 
     # Write scores to DB

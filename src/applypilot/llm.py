@@ -89,9 +89,9 @@ class LLMClient:
         self.model = model
         self.api_key = api_key
         self._client = httpx.Client(timeout=_TIMEOUT)
-        # True once we've confirmed the native Gemini API works for this model
-        self._use_native_gemini: bool = False
+        # Always use native Gemini API for reliability and to avoid 404/truncation on compat layer
         self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+        self._use_native_gemini: bool = self._is_gemini
 
     # -- Native Gemini API --------------------------------------------------
 
@@ -142,7 +142,10 @@ class LLMClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            raise RuntimeError(f"Unexpected Gemini API response structure. No candidates found in: {data}")
 
     # -- OpenAI-compat API --------------------------------------------------
 
@@ -170,9 +173,9 @@ class LLMClient:
             headers=headers,
         )
 
-        # 403 on Gemini compat = model not available on compat layer.
+        # 403/404 on Gemini compat = model or endpoint not available on compat layer.
         # Raise a specific sentinel so chat() can switch to native API.
-        if resp.status_code == 403 and self._is_gemini:
+        if resp.status_code in (403, 404) and self._is_gemini:
             raise _GeminiCompatForbidden(resp)
 
         return self._handle_compat_response(resp)
@@ -210,9 +213,10 @@ class LLMClient:
             except _GeminiCompatForbidden as exc:
                 # Model not available on OpenAI-compat layer — switch to native.
                 log.warning(
-                    "Gemini compat endpoint returned 403 for model '%s'. "
+                    "Gemini compat endpoint returned %d for model '%s'. "
                     "Switching to native generateContent API. "
                     "(Preview/experimental models are often compat-only on native.)",
+                    exc.response.status_code,
                     self.model,
                 )
                 self._use_native_gemini = True

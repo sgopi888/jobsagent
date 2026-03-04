@@ -400,7 +400,7 @@ def tailor_resume(
             {"role": "user", "content": f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\nTARGET JOB:\n{job_text}\n\nReturn the JSON:"},
         ]
 
-        raw = client.chat(messages, max_tokens=2048, temperature=0.4)
+        raw = client.chat(messages, max_tokens=4096, temperature=0.3)
 
         # Parse JSON from response
         try:
@@ -491,8 +491,10 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
                                              validation_mode=validation_mode)
 
             # Build safe filename prefix
-            safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
-            safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
+            title_str = str(job.get("title") or "Unknown_Role")
+            site_str = str(job.get("site") or "Unknown_Company")
+            safe_title = re.sub(r"[^\w\s-]", "", title_str)[:50].strip().replace(" ", "_")
+            safe_site = re.sub(r"[^\w\s-]", "", site_str)[:20].strip().replace(" ", "_")
             prefix = f"{safe_site}_{safe_title}"
 
             # Save tailored resume text
@@ -535,24 +537,26 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
                 "attempts": report["attempts"],
             }
         except Exception as e:
+            title_str = str(job.get("title") or "Unknown")
             result = {
-                "url": job["url"], "title": job["title"], "site": job["site"],
+                "url": job["url"], "title": title_str, "site": job.get("site", "Unknown"),
                 "status": "error", "attempts": 0, "path": None, "pdf_path": None,
             }
-            log.error("%d/%d [ERROR] %s -- %s", completed, len(jobs), job["title"][:40], e)
+            log.error("%d/%d [ERROR] %s -- %s", completed, len(jobs), title_str[:40], e)
 
         results.append(result)
         stats[result.get("status", "error")] = stats.get(result.get("status", "error"), 0) + 1
 
         elapsed = time.time() - t0
         rate = completed / elapsed if elapsed > 0 else 0
+        title_str = str(result.get("title") or "Unknown")
         log.info(
             "%d/%d [%s] attempts=%s | %.1f jobs/min | %s",
             completed, len(jobs),
             result["status"].upper(),
             result.get("attempts", "?"),
             rate * 60,
-            result["title"][:40],
+            title_str[:40],
         )
 
     # Persist to DB: increment attempt counter for ALL, save path only for approved
