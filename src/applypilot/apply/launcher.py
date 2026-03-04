@@ -111,7 +111,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                 FROM jobs
                 WHERE (url = ? OR application_url = ? OR application_url LIKE ? OR url LIKE ?)
                   AND tailored_resume_path IS NOT NULL
-                  AND apply_status != 'in_progress'
+                  AND (apply_status IS NULL OR apply_status != 'in_progress')
                 LIMIT 1
             """, (target_url, target_url, like, like)).fetchone()
         else:
@@ -623,15 +623,17 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                              jobs_done=applied + failed)
 
         except KeyboardInterrupt:
-            release_lock(job["url"])
+            if job:
+                release_lock(job["url"])
             if _stop_event.is_set():
                 break
             add_event(f"[W{worker_id}] Job skipped (Ctrl+C)")
             continue
         except Exception as e:
             logger.exception("Worker %d launcher error", worker_id)
-            add_event(f"[W{worker_id}] Launcher error: {str(e)[:40]}")
-            release_lock(job["url"])
+            add_event(f"[W{worker_id}] Launcher error: {str(e)[:60]}")
+            if job:
+                release_lock(job["url"])
             failed += 1
             update_state(worker_id, jobs_failed=failed)
         finally:
