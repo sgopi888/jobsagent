@@ -132,7 +132,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
                 WHERE tailored_resume_path IS NOT NULL
-                  AND (apply_status IS NULL OR apply_status = 'failed')
+                  AND (apply_status IS NULL OR apply_status IN ('failed', 'pending'))
                   AND (apply_attempts IS NULL OR apply_attempts < ?)
                   AND fit_score >= ?
                   {site_clause}
@@ -236,7 +236,8 @@ def gen_prompt(target_url: str, min_score: int = 7,
     # Write prompt file
     config.ensure_dirs()
     site_slug = (job.get("site") or "unknown")[:20].replace(" ", "_")
-    prompt_file = config.LOG_DIR / f"prompt_{site_slug}_{job['title'][:30].replace(' ', '_')}.txt"
+    title_safe = (job.get("title") or "Unknown").replace(" ", "_")
+    prompt_file = config.LOG_DIR / f"prompt_{site_slug}_{title_safe[:30]}.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
 
     # Write MCP config for reference
@@ -349,16 +350,17 @@ def run_job(job: dict, port: int, worker_id: int = 0,
 
     worker_dir = reset_worker_dir(worker_id)
 
-    update_state(worker_id, status="applying", job_title=job["title"],
+    update_state(worker_id, status="applying", job_title=job.get("title", "Unknown Title"),
                  company=job.get("site", ""), score=job.get("fit_score", 0),
                  start_time=time.time(), actions=0, last_action="starting")
-    add_event(f"[W{worker_id}] Starting: {job['title'][:40]} @ {job.get('site', '')}")
+    title_str = job.get('title') or "Unknown Title"
+    add_event(f"[W{worker_id}] Starting: {title_str[:40]} @ {job.get('site', '')}")
 
     worker_log = config.LOG_DIR / f"worker-{worker_id}.log"
     ts_header = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_header = (
         f"\n{'=' * 60}\n"
-        f"[{ts_header}] {job['title']} @ {job.get('site', '')}\n"
+        f"[{ts_header}] {title_str} @ {job.get('site', '')}\n"
         f"URL: {job.get('application_url') or job['url']}\n"
         f"Score: {job.get('fit_score', 'N/A')}/10\n"
         f"{'=' * 60}\n"
@@ -467,7 +469,8 @@ def run_job(job: dict, port: int, worker_id: int = 0,
 
         for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
             if f"RESULT:{result_status}" in output:
-                add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {job['title'][:30]}")
+                title_str = job.get('title') or "Unknown Title"
+                add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {title_str[:30]}")
                 update_state(worker_id, status=result_status.lower(),
                              last_action=f"{result_status} ({elapsed}s)")
                 return result_status.lower(), duration_ms
@@ -483,7 +486,8 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                     reason = _clean_reason(reason)
                     PROMOTE_TO_STATUS = {"captcha", "expired", "login_issue"}
                     if reason in PROMOTE_TO_STATUS:
-                        add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s): {job['title'][:30]}")
+                        title_str = job.get('title') or "Unknown Title"
+                        add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s): {title_str[:30]}")
                         update_state(worker_id, status=reason,
                                      last_action=f"{reason.upper()} ({elapsed}s)")
                         return reason, duration_ms
@@ -606,7 +610,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
 
             if result == "skipped":
                 release_lock(job["url"])
-                add_event(f"[W{worker_id}] Skipped: {job['title'][:30]}")
+                title_str = job.get('title') or "Unknown Title"
+                add_event(f"[W{worker_id}] Skipped: {title_str[:30]}")
                 continue
             elif result == "applied":
                 mark_result(job["url"], "applied", duration_ms=duration_ms)
