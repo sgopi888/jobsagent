@@ -256,6 +256,144 @@ def apply(
     )
 
 
+def _add_job_to_db(url: str, title: Optional[str], company: Optional[str],
+                   location: Optional[str], description: Optional[str]) -> tuple[bool, str]:
+    """Insert a job URL into the DB. Returns (was_inserted, company_name).
+
+    Returns (True, company) on fresh insert, (False, company) if already exists.
+    """
+    import sqlite3
+    from datetime import datetime, timezone
+    from urllib.parse import urlparse
+    from applypilot.database import get_connection
+
+    conn = get_connection()
+    discovered_at = datetime.now(timezone.utc).isoformat()
+
+    if not company:
+        try:
+            host = urlparse(url).hostname or ""
+            parts = host.replace("www.", "").split(".")
+            company = parts[0].capitalize() if parts else "Unknown"
+        except Exception:
+            company = "Unknown"
+
+    inferred_title = title or "Unknown Role"
+    inferred_desc = description or f"Manually added job at {company}."
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO jobs (url, title, location, description, site, strategy, discovered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (url, inferred_title, location or "", inferred_desc, "manual", "cli-add", discovered_at),
+        )
+        conn.commit()
+        return True, company
+    except sqlite3.IntegrityError:
+        return False, company
+
+
+@app.command()
+def add(
+    url: str = typer.Argument(..., help="Job posting URL to add manually."),
+    title: Optional[str] = typer.Option(None, "--title", "-t", help="Job title."),
+    company: Optional[str] = typer.Option(None, "--company", "-c", help="Company name."),
+    location: Optional[str] = typer.Option(None, "--location", "-l", help="Job location (e.g. 'New York, NY')."),
+    description: Optional[str] = typer.Option(None, "--description", "-d", help="Short job description or notes."),
+    run_pipeline: bool = typer.Option(
+        False, "--run", "-r",
+        help="Immediately run enrich → score → tailor after adding.",
+    ),
+) -> None:
+    """Add a job URL manually to the database, then optionally run the pipeline on it."""
+    _bootstrap()
+
+    inserted, company_name = _add_job_to_db(url, title, company, location, description)
+
+    if inserted:
+        console.print(f"\n[green]✓ Added:[/green] [bold]{title or 'Unknown Role'}[/bold] @ {company_name}")
+        console.print(f"  URL: {url}")
+        if not run_pipeline:
+            console.print(
+                "\n[dim]Next steps:[/dim]\n"
+                "  [bold]applypilot run enrich score tailor[/bold]  — prepare resume\n"
+                f"  [bold]applypilot apply --url \"{url}\"[/bold]  — apply\n"
+            )
+    else:
+        console.print(f"\n[yellow]⚠ Already in DB:[/yellow] {url}")
+        console.print("[dim]Skipping insert — job exists. Running pipeline anyway if --run set.[/dim]\n")
+        if not run_pipeline:
+            return
+
+    if run_pipeline:
+        console.print("[bold blue]Running enrich → score → tailor pipeline...[/bold blue]\n")
+        from applypilot.pipeline import run_pipeline as _run_pipeline
+        _run_pipeline(stages=["enrich", "score", "tailor"], min_score=7, dry_run=False,
+                      stream=False, workers=1, validation_mode="normal")
+
+
+@app.command()
+def url(
+    job_url: str = typer.Argument(..., help="Job posting URL to add and apply to automatically."),
+    title: Optional[str] = typer.Option(None, "--title", "-t", help="Job title (optional, auto-inferred if omitted)."),
+    company: Optional[str] = typer.Option(None, "--company", "-c", help="Company name (optional, auto-inferred)."),
+    location: Optional[str] = typer.Option(None, "--location", "-l", help="Job location."),
+    model: str = typer.Option("haiku", "--model", "-m", help="Claude model for auto-apply."),
+    headless: bool = typer.Option(False, "--headless", help="Run browser in headless mode."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without submitting."),
+) -> None:
+    """Full auto-pilot: add URL → enrich → score → tailor → apply. One command does it all."""
+    _bootstrap()
+
+    from applypilot.config import check_tier, PROFILE_PATH as _profile_path
+
+    # Tier 3 required (Claude Code CLI + Chrome)
+    check_tier(3, "auto-apply")
+
+    if not _profile_path.exists():
+        console.print(
+            "[red]Profile not found.[/red]\n"
+            "Run [bold]applypilot init[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold blue]⚡ Auto-Pilot:[/bold blue] {job_url}\n")
+
+    # ── Step 1: Add to DB ────────────────────────────────────────────────────
+    console.print("[bold]Step 1/3:[/bold] Adding job to database...")
+    inserted, company_name = _add_job_to_db(job_url, title, company, location, None)
+    if inserted:
+        console.print(f"  [green]✓ Added[/green] @ {company_name}")
+    else:
+        console.print(f"  [yellow]⚠ Already in DB[/yellow] — skipping insert, continuing pipeline")
+
+    # ── Step 2: enrich → score → tailor ─────────────────────────────────────
+    console.print("\n[bold]Step 2/3:[/bold] Running enrich → score → tailor...")
+    from applypilot.pipeline import run_pipeline as _run_pipeline
+    result = _run_pipeline(stages=["enrich", "score", "tailor"], min_score=7, dry_run=False,
+                           stream=False, workers=1, validation_mode="normal")
+
+    if result.get("errors"):
+        console.print("[red]Pipeline had errors — aborting apply.[/red]")
+        raise typer.Exit(code=1)
+
+    # ── Step 3: Apply ────────────────────────────────────────────────────────
+    console.print("\n[bold]Step 3/3:[/bold] Launching auto-apply...\n")
+    from applypilot.apply.launcher import main as apply_main
+    apply_main(
+        limit=1,
+        target_url=job_url,
+        min_score=7,
+        headless=headless,
+        model=model,
+        dry_run=dry_run,
+        continuous=False,
+        workers=1,
+    )
+
+
 @app.command()
 def status() -> None:
     """Show pipeline statistics from the database."""
@@ -380,20 +518,32 @@ def doctor() -> None:
 
     # --- Tier 2 checks ---
     import os
+    from applypilot.llm import get_client
     has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
     has_openai = bool(os.environ.get("OPENAI_API_KEY"))
     has_local = bool(os.environ.get("LLM_URL"))
-    if has_gemini:
-        model = os.environ.get("LLM_MODEL", "gemini-2.0-flash")
-        results.append(("LLM API key", ok_mark, f"Gemini ({model})"))
-    elif has_openai:
-        model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
-        results.append(("LLM API key", ok_mark, f"OpenAI ({model})"))
-    elif has_local:
-        results.append(("LLM API key", ok_mark, f"Local: {os.environ.get('LLM_URL')}"))
-    else:
-        results.append(("LLM API key", fail_mark,
-                        "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"))
+    
+    llm_status = fail_mark
+    llm_note = "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"
+    
+    if has_gemini or has_openai or has_local:
+        provider = "Gemini" if has_gemini else ("OpenAI" if has_openai else "Local")
+        model = os.environ.get("LLM_MODEL", "gemini-2.0-flash" if has_gemini else "gpt-4o-mini")
+        
+        # Test real connectivity
+        try:
+            client = get_client()
+            # Simple test prompt
+            client.ask("test", max_tokens=5)
+            llm_status = ok_mark
+            llm_note = f"{provider} ({model}) - Connectivity OK"
+        except Exception as e:
+            llm_status = fail_mark
+            # Strip long tracebacks/messages for cleaner output
+            err_msg = str(e).split('\n')[0][:50]
+            llm_note = f"{provider} ({model}) - Error: {err_msg}"
+            
+    results.append(("LLM Connectivity", llm_status, llm_note))
 
     # --- Tier 3 checks ---
     # Claude Code CLI
