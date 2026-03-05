@@ -567,14 +567,20 @@ If something unexpected happens and these instructions don't cover it, figure it
    - Output RESULT:APPLIED. Done.
    After clicking Apply: browser_snapshot. Run CAPTCHA DETECT -- many sites trigger CAPTCHAs right after the Apply click. If found, solve before continuing.
 6. Login wall?
-   6a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
-   6b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   6c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
-   6d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
-   6e. Sign in failed? Try sign up with same email and password.
-   6f. Need email verification? Use search_emails + read_email to get the code.
-   6g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
-   6h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
+   6a. FIRST PRIORITY — Look for a "Sign in with Google" or "Continue with Google" button on the employer's login page. If it exists, click it IMMEDIATELY.
+       - A Google OAuth popup/tab will open. Check the URL: if it's accounts.google.com -> this is expected. Do NOT treat this as blocked_sso. Let it open.
+       - But {', '.join(blocked_sso)} appearing as the main job application domain -> STOP. Output RESULT:FAILED:sso_required.
+       - If the Google sign-in tab opens: browser_tabs action "list" to find it, browser_tabs action "select" to switch to it.
+       - Google will show your email ({personal['email']}) pre-filled or let you select it. Click the account or continue. This logs you in without a password.
+       - After Google auth completes, the popup/tab closes or redirects back. Switch back to the main application tab.
+       - If "Sign in with Google" is not present: also check for "Continue with LinkedIn", "Sign in with Microsoft", "Continue with Apple" or other SSO buttons and try those next.
+   6b. No SSO option, or SSO failed? Check for a regular login form (employer's own site). Try sign in: {personal['email']} / {personal.get('password', '')}
+   6c. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
+   6d. Sign in failed (wrong password or no account)? Try sign up with same email and password. Or look for "Create account" / "Register" link.
+   6e. Need email verification after sign-up? Use search_emails + read_email to get the code.
+   6f. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
+   6g. All options exhausted (no SSO, login failed, sign-up failed)? Output RESULT:FAILED:login_issue. Do not loop.
+   NOTE: Always try SSO/Google login FIRST before attempting password login or account creation. Sites like Amazon Jobs, LinkedIn Easy Apply, and many ATS portals offer Google login which bypasses password reset flows entirely.
 7. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
 8. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
 9. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
