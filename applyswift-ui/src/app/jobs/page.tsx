@@ -100,13 +100,18 @@ function JobRow({ job }: { job: Job }) {
           {st.label}
         </span>
 
-        {/* Date */}
-        <div style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap", minWidth: 70, textAlign: "right" }}>
-          {job.applied_at
-            ? new Date(job.applied_at).toLocaleDateString()
-            : job.scored_at
-            ? new Date(job.scored_at).toLocaleDateString()
-            : "—"}
+        {/* Date / Time */}
+        <div style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap", minWidth: 90, textAlign: "right" }}>
+          {job.applied_at ? (
+            <span title={new Date(job.applied_at).toLocaleString()} style={{ color: "#34d399" }}>
+              {new Date(job.applied_at).toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+              <span style={{ color: "rgba(52,211,153,0.6)", fontSize: 10 }}>
+                {new Date(job.applied_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </span>
+          ) : job.scored_at ? (
+            new Date(job.scored_at).toLocaleDateString()
+          ) : "—"}
         </div>
 
         {/* Open link */}
