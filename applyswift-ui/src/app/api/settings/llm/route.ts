@@ -6,29 +6,28 @@ import { paths } from "@/lib/paths";
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
-// Model options — mirrors config.py LLM_DEFAULTS exactly.
+// Model options — 3 providers, 3 models each. Mirrors config.py LLM_DEFAULTS.
 // Single source of truth on the UI side. Change here → propagates everywhere.
 // ---------------------------------------------------------------------------
 export const LLM_PROVIDERS = {
   gemini: {
     name: "Google Gemini",
     env_key: "GEMINI_API_KEY",
-    default_model: "gemini-2.5-flash-lite",   // verified working; 2.0-flash-lite deprecated for new keys
+    default_model: "gemini-2.5-flash-lite",
     models: [
-      { id: "gemini-2.5-flash-lite",  label: "Gemini 2.5 Flash Lite (default, free, fast)" },
-      { id: "gemini-flash-lite-latest", label: "Gemini Flash Lite Latest (alias)" },
-      { id: "gemini-2.5-flash",       label: "Gemini 2.5 Flash (smarter)" },
-      { id: "gemini-2.0-flash-lite-001", label: "Gemini 2.0 Flash Lite 001 (stable pin)" },
+      { id: "gemini-2.5-flash-lite",    label: "Gemini 2.5 Flash Lite — free tier, fast (default)" },
+      { id: "gemini-2.5-flash",         label: "Gemini 2.5 Flash — smarter, slightly slower" },
+      { id: "gemini-2.0-flash-lite-001", label: "Gemini 2.0 Flash Lite 001 — stable pinned version" },
     ],
   },
   openai: {
     name: "OpenAI",
     env_key: "OPENAI_API_KEY",
-    default_model: "gpt-4o-mini",
+    default_model: "gpt-5-nano",
     models: [
-      { id: "gpt-4o-mini",  label: "GPT-4o Mini (default, cheap)" },
-      { id: "gpt-4o",       label: "GPT-4o (smarter)" },
-      { id: "gpt-4.1-nano", label: "GPT-4.1 Nano (cheapest)" },
+      { id: "gpt-5-nano",  label: "GPT-5 Nano — cheapest, very fast (default)" },
+      { id: "gpt-4o-mini", label: "GPT-4o Mini — capable, low cost" },
+      { id: "gpt-4o",      label: "GPT-4o — smartest, higher cost" },
     ],
   },
   ollama: {
@@ -36,10 +35,9 @@ export const LLM_PROVIDERS = {
     env_key: "LLM_URL",
     default_model: "gemma3:latest",
     models: [
-      { id: "gemma3:latest",       label: "Gemma 3 (recommended local)" },
-      { id: "llama3.2:latest",     label: "Llama 3.2" },
-      { id: "qwen3:latest",        label: "Qwen 3" },
-      { id: "mistral:latest",      label: "Mistral 7B" },
+      { id: "gemma3:latest",           label: "Gemma 3 4B — vision enabled, 3.3 GB, recommended (default)" },
+      { id: "qwen3-vl:latest",         label: "Qwen3 VL — vision enabled, 6.1 GB, higher quality" },
+      { id: "qwen3-coder-next:latest", label: "Qwen3 Coder — 51 GB, best for code-heavy roles" },
     ],
   },
 } as const;
@@ -123,6 +121,11 @@ export async function GET() {
         : env.GEMINI_API_KEY
         ? "gemini"
         : null,
+      // CapSolver — used by apply agent for CAPTCHA solving
+      capsolver: {
+        configured: !!env.CAPSOLVER_API_KEY,
+        api_key_hint: env.CAPSOLVER_API_KEY ? `***${env.CAPSOLVER_API_KEY.slice(-4)}` : "",
+      },
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
