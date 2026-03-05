@@ -252,8 +252,14 @@ export default function ApplyPage() {
   const [activeMode, setActiveMode] = useState<"url" | "list" | "verify" | null>(null);
   const [currentJob, setCurrentJob] = useState("");
   const [verifyModal, setVerifyModal] = useState<{ url: string; title?: string } | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const batchRef = useRef(false); // ref for access inside SSE exit callback
+  const dryRunRef = useRef(dryRun);
   const sse = useSSE();
   const termRef = useRef<HTMLDivElement>(null);
+
+  // Keep ref in sync with state (refs are readable inside stale closures)
+  useEffect(() => { dryRunRef.current = dryRun; }, [dryRun]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -276,17 +282,50 @@ export default function ApplyPage() {
 
   useEffect(() => {
     if (sse.exitCode !== null) {
-      fetchData();
       const combined = sse.lines.map(l => l.line).join("\n");
-      if (
+
+      // Check for verification first — pause batch mode if verification needed
+      const needsVerify = (
         combined.toLowerCase().includes("needs_verification") ||
         combined.toLowerCase().includes("pending_verification") ||
         combined.toLowerCase().includes("email verification")
-      ) {
+      );
+      if (needsVerify) {
+        // Pause batch — user must verify first
+        batchRef.current = false;
+        setBatchRunning(false);
         const match = combined.match(/NEEDS_VERIFICATION:\s*(https?:\/\/\S+)/i);
         const jobUrl = match?.[1] || pendingVerify[0]?.url || "";
         setVerifyModal({ url: jobUrl, title: pendingVerify[0]?.title || undefined });
+        fetchData();
+        return;
       }
+
+      // Refresh data, then auto-continue batch if active
+      fetchData().then(async () => {
+        if (!batchRef.current) return; // batch was stopped
+        // Re-fetch queue after data refresh
+        try {
+          const res = await fetch("/api/jobs?status=ready&limit=50");
+          const freshQueue: Job[] = res.ok ? await res.json() : [];
+          if (freshQueue.length === 0) {
+            // Queue empty — batch done
+            batchRef.current = false;
+            setBatchRunning(false);
+            setActiveMode(null);
+            return;
+          }
+          // Wait 3s between jobs so Chrome has time to close
+          await new Promise(r => setTimeout(r, 3000));
+          if (!batchRef.current) return; // stopped during wait
+          sse.clear();
+          setCurrentJob(jobLabel(freshQueue[0]));
+          sse.start("/api/apply/run", { limit: 1, dry_run: dryRunRef.current });
+        } catch {
+          batchRef.current = false;
+          setBatchRunning(false);
+        }
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sse.exitCode]);
@@ -303,10 +342,26 @@ export default function ApplyPage() {
     sse.start("/api/apply/url", { url: urlInput.trim(), dry_run: dryRun });
   };
 
+  // "Apply Next" — one job only, no auto-continue (search engine jobs only)
   const handleApplyList = () => {
-    if (sse.running || queue.length === 0) return;
+    const searchQueue = queue.filter(j => j.strategy !== "web-ui");
+    if (sse.running || searchQueue.length === 0) return;
+    batchRef.current = false;
+    setBatchRunning(false);
     setActiveMode("list");
-    setCurrentJob(queue[0] ? jobLabel(queue[0]) : "Next in queue");
+    setCurrentJob(searchQueue[0] ? jobLabel(searchQueue[0]) : "Next in queue");
+    sse.clear();
+    sse.start("/api/apply/run", { limit: 1, dry_run: dryRun });
+  };
+
+  // "Apply All" — runs one job at a time, auto-continues until queue empty (search engine jobs only)
+  const handleApplyAll = () => {
+    const searchQueue = queue.filter(j => j.strategy !== "web-ui");
+    if (sse.running || searchQueue.length === 0) return;
+    batchRef.current = true;
+    setBatchRunning(true);
+    setActiveMode("list");
+    setCurrentJob(searchQueue[0] ? jobLabel(searchQueue[0]) : "Next in queue");
     sse.clear();
     sse.start("/api/apply/run", { limit: 1, dry_run: dryRun });
   };
@@ -322,6 +377,9 @@ export default function ApplyPage() {
   };
 
   const handleStop = async () => {
+    // Cancel batch mode first so the exit effect doesn't restart
+    batchRef.current = false;
+    setBatchRunning(false);
     // 1. Abort the SSE stream on the client side immediately
     sse.stop();
     // 2. Kill the server-side applypilot subprocess (Chrome stays open for verification)
@@ -472,37 +530,60 @@ export default function ApplyPage() {
             </div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700 }}>Apply List</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Apply to next ready job in queue</div>
-            </div>
-          </div>
-          {/* Top job preview */}
-          {queue.length > 0 ? (
-            <div style={{ marginBottom: 10, padding: "9px 12px", background: "rgba(52,211,153,0.05)", border: "1px solid rgba(52,211,153,0.12)", borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}>
-              <ScoreDot score={queue[0].fit_score} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {jobLabel(queue[0])}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{queue[0].site}{queue[0].location ? ` · ${queue[0].location}` : ""}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                {batchRunning ? "Running all jobs…" : "Apply to search engine jobs"}
               </div>
-              <a href={queue[0].url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-muted)", display: "flex" }}><ArrowUpRight size={12} /></a>
             </div>
-          ) : (
-            <div style={{ marginBottom: 10, padding: "9px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>
-              Queue empty — run pipeline first
-            </div>
-          )}
-          <button
-            className="btn-emerald"
-            onClick={handleApplyList}
-            disabled={sse.running || queue.length === 0}
-            style={{ width: "100%", justifyContent: "center" }}
-          >
-            {sse.running && activeMode === "list"
-              ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Running…</>
-              : <><Play size={13} /> {dryRun ? "Dry-Run Next" : `Apply Next (${queue.length} ready)`}</>
-            }
-          </button>
+            {batchRunning && <span className="pulse-dot" style={{ background: "#34d399", width: 6, height: 6, flexShrink: 0, marginLeft: "auto" }} />}
+          </div>
+          {/* Top job preview — search engine queue only (excludes manually added jobs) */}
+          {(() => {
+            const searchQueue = queue.filter(j => j.strategy !== "web-ui");
+            const topJob = searchQueue[0];
+            return topJob ? (
+              <div style={{ marginBottom: 10, padding: "9px 12px", background: "rgba(52,211,153,0.05)", border: "1px solid rgba(52,211,153,0.12)", borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                <ScoreDot score={topJob.fit_score} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {jobLabel(topJob)}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{topJob.site}{topJob.location ? ` · ${topJob.location}` : ""}</div>
+                </div>
+                <a href={topJob.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-muted)", display: "flex" }}><ArrowUpRight size={12} /></a>
+              </div>
+            ) : (
+              <div style={{ marginBottom: 10, padding: "9px 12px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-subtle)", borderRadius: 8, fontSize: 12, color: "var(--text-muted)", textAlign: "center" }}>
+                {queue.length > 0 ? "Only manual jobs in queue — use Apply URL" : "Queue empty — run pipeline first"}
+              </div>
+            );
+          })()}
+          {/* Two buttons: Apply Next (one job) and Apply All (entire queue) */}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn-emerald"
+              onClick={handleApplyList}
+              disabled={sse.running || queue.filter(j => j.strategy !== "web-ui").length === 0}
+              style={{ flex: 1, justifyContent: "center" }}
+              title="Apply to the next job then stop"
+            >
+              {sse.running && activeMode === "list" && !batchRunning
+                ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Running…</>
+                : <><Play size={13} /> {dryRun ? "Dry-Run 1" : "Apply Next"}</>
+              }
+            </button>
+            <button
+              className="btn-emerald"
+              onClick={handleApplyAll}
+              disabled={sse.running || queue.filter(j => j.strategy !== "web-ui").length === 0}
+              style={{ flex: 1, justifyContent: "center", opacity: batchRunning ? 1 : 0.85 }}
+              title={`Apply to all ${queue.filter(j => j.strategy !== "web-ui").length} queued jobs sequentially`}
+            >
+              {sse.running && activeMode === "list" && batchRunning
+                ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Batch…</>
+                : <><ListChecks size={13} /> {dryRun ? "Dry-Run All" : `Apply All (${queue.filter(j => j.strategy !== "web-ui").length})`}</>
+              }
+            </button>
+          </div>
         </div>
       </div>
 
