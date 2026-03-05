@@ -1,11 +1,10 @@
 "use client";
-
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Zap, Play, RefreshCw, RotateCcw, ArrowUpRight,
   Mail, Key, X, AlertTriangle, FlaskConical,
   Gauge, Clock, MousePointerClick, DollarSign, Activity,
-  ChevronRight, ListChecks,
+  ChevronRight, ListChecks, Square,
 } from "lucide-react";
 import { useSSE } from "@/hooks/useSSE";
 import type { Job } from "@/lib/types";
@@ -23,6 +22,17 @@ function ScoreDot({ score }: { score?: number | null }) {
       fontSize: 10, fontWeight: 700, color, flexShrink: 0,
     }}>{s || "—"}</div>
   );
+}
+
+/** Show job title, falling back to domain extracted from URL */
+function jobLabel(job: { title?: string | null; url: string; site?: string | null }) {
+  if (job.title && job.title !== "Unknown Role") return job.title;
+  try {
+    const host = new URL(job.url).hostname.replace(/^www\./, "");
+    return job.site && job.site !== "manual" ? `Job at ${job.site}` : `Job at ${host}`;
+  } catch {
+    return job.site && job.site !== "manual" ? `Job at ${job.site}` : "Job (no title)";
+  }
 }
 
 function elapsed(startIso: string | null) {
@@ -96,9 +106,10 @@ interface CockpitProps {
   currentJob: string;
   termRef: React.RefObject<HTMLDivElement | null>;
   onClear: () => void;
+  onStop: () => void;
 }
 
-function CockpitConsole({ running, lines, exitCode, mode, currentJob, termRef, onClear }: CockpitProps) {
+function CockpitConsole({ running, lines, exitCode, mode, currentJob, termRef, onClear, onStop }: CockpitProps) {
   const allText = lines.map(l => l.line).join("\n");
   const costMatch = allText.match(/\$([0-9]+\.[0-9]+)/g);
   const cost = costMatch ? parseFloat(costMatch[costMatch.length - 1].replace("$", "")) : null;
@@ -130,7 +141,29 @@ function CockpitConsole({ running, lines, exitCode, mode, currentJob, termRef, o
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{currentJob}</span>
           </div>
         )}
-        <div style={{ marginLeft: "auto", padding: "6px 12px", display: "flex", alignItems: "center" }}>
+        <div style={{ marginLeft: "auto", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+          {running && (
+            <button
+              onClick={onStop}
+              style={{
+                background: "rgba(251,113,133,0.1)",
+                border: "1px solid rgba(251,113,133,0.3)",
+                borderRadius: 5,
+                padding: "3px 10px",
+                fontSize: 9,
+                color: "#fb7185",
+                cursor: "pointer",
+                fontWeight: 800,
+                letterSpacing: "0.08em",
+                fontFamily: "monospace",
+                display: "flex",
+                alignItems: "center",
+                gap: 5
+              }}
+            >
+              <Square size={8} fill="currentColor" /> STOP
+            </button>
+          )}
           <button onClick={onClear} style={{ background: "none", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "3px 10px", fontSize: 9, color: "rgba(255,255,255,0.25)", cursor: "pointer", letterSpacing: "0.08em", fontFamily: "monospace" }}>
             CLR
           </button>
@@ -255,7 +288,7 @@ export default function ApplyPage() {
         setVerifyModal({ url: jobUrl, title: pendingVerify[0]?.title || undefined });
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sse.exitCode]);
 
   useEffect(() => {
@@ -273,7 +306,7 @@ export default function ApplyPage() {
   const handleApplyList = () => {
     if (sse.running || queue.length === 0) return;
     setActiveMode("list");
-    setCurrentJob(queue[0]?.title || "Next in queue");
+    setCurrentJob(queue[0] ? jobLabel(queue[0]) : "Next in queue");
     sse.clear();
     sse.start("/api/apply/run", { limit: 1, dry_run: dryRun });
   };
@@ -286,6 +319,14 @@ export default function ApplyPage() {
     setCurrentJob(pendingVerify[0]?.title || jobUrl);
     sse.clear();
     sse.start("/api/apply/verify", { url: jobUrl, code });
+  };
+
+  const handleStop = async () => {
+    // 1. Abort the SSE stream on the client side immediately
+    sse.stop();
+    // 2. Kill the server-side applypilot subprocess (Chrome stays open for verification)
+    await fetch("/api/apply/stop", { method: "POST" });
+    setActiveMode(null);
   };
 
   const handleResetFailed = async () => {
@@ -440,7 +481,7 @@ export default function ApplyPage() {
               <ScoreDot score={queue[0].fit_score} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {queue[0].title || "Unknown Role"}
+                  {jobLabel(queue[0])}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{queue[0].site}{queue[0].location ? ` · ${queue[0].location}` : ""}</div>
               </div>
@@ -484,6 +525,7 @@ export default function ApplyPage() {
           currentJob={currentJob}
           termRef={termRef}
           onClear={() => { sse.clear(); setActiveMode(null); setCurrentJob(""); }}
+          onStop={handleStop}
         />
       </div>
 
@@ -502,7 +544,7 @@ export default function ApplyPage() {
                 <div key={job.url} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 4px", borderBottom: i < queue.length - 1 ? "1px solid var(--border-subtle)" : "none" }}>
                   <ScoreDot score={job.fit_score} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{job.title || "Unknown Role"}</div>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jobLabel(job)}</div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{job.site}{job.location ? ` · ${job.location}` : ""}</div>
                   </div>
                   <a href={job.url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-muted)", display: "flex", padding: 4, flexShrink: 0 }}><ArrowUpRight size={12} /></a>
@@ -525,7 +567,7 @@ export default function ApplyPage() {
                 <div key={job.url} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 4px", borderBottom: i < history.length - 1 ? "1px solid var(--border-subtle)" : "none" }}>
                   <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#34d399", boxShadow: "0 0 5px rgba(52,211,153,0.45)", flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{job.title || "Unknown Role"}</div>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{jobLabel(job)}</div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
                       {job.site} · {job.applied_at ? new Date(job.applied_at).toLocaleDateString() : "—"}
                       {job.apply_duration_ms ? ` · ${Math.round(job.apply_duration_ms / 1000)}s` : ""}
