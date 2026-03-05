@@ -294,7 +294,7 @@ function ProfileTab() {
 
       {/* Skills */}
       <Section title="Skills">
-        <p className="text-xs text-slate-500 -mt-2">Comma-separated. Used for screening questions and confidence scoring.</p>
+        <p className="text-xs text-slate-500 -mt-2">Comma-separated. Used as reference data — the agent reads these to answer screening questions and rate your fit. Each site words questions differently; the agent decides the best answer per question using this as context.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="Programming Languages" value={(skills.programming_languages || []).join(", ")} onChange={(v) => setSkill("programming_languages", v)} placeholder="Python, Java, SQL, TypeScript" />
           <Field label="ML / AI"               value={(skills.ml_ai || []).join(", ")}               onChange={(v) => setSkill("ml_ai", v)}               placeholder="LLMs, RAG, Agentic AI, Prompt Engineering" />
@@ -304,12 +304,15 @@ function ProfileTab() {
       </Section>
 
       {/* EEO */}
-      <Section title="EEO / Demographics (Optional — all default to Decline)">
+      <Section title="EEO / Demographics (Optional)">
+        <p className="text-xs text-amber-400/70 -mt-2 leading-relaxed">
+          ℹ️ These are your <strong>preferences / intent</strong> — not hardcoded answers. Every job site words these questions differently. The apply agent reads your preference here and picks the closest available option on each site (e.g. "Decline to answer", "Prefer not to say", "I do not wish to disclose", etc.).
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Select label="Gender"          value={eeo.gender || "Decline to self-identify"}         onChange={(v) => setP("eeo_voluntary", "gender", v)}          options={declineOpts} />
-          <Select label="Race / Ethnicity" value={eeo.race_ethnicity || "Decline to self-identify"} onChange={(v) => setP("eeo_voluntary", "race_ethnicity", v)}   options={raceOpts} />
-          <Select label="Veteran Status"  value={eeo.veteran_status || "Decline to self-identify"}  onChange={(v) => setP("eeo_voluntary", "veteran_status", v)}   options={vetOpts} />
-          <Select label="Disability Status" value={eeo.disability_status || "I do not wish to answer"} onChange={(v) => setP("eeo_voluntary", "disability_status", v)} options={disabilityOpts} />
+          <Select label="Gender (your preference)"          value={eeo.gender || "Decline to self-identify"}         onChange={(v) => setP("eeo_voluntary", "gender", v)}          options={declineOpts} />
+          <Select label="Race / Ethnicity (your preference)" value={eeo.race_ethnicity || "Decline to self-identify"} onChange={(v) => setP("eeo_voluntary", "race_ethnicity", v)}   options={raceOpts} />
+          <Select label="Veteran Status (your preference)"  value={eeo.veteran_status || "Decline to self-identify"}  onChange={(v) => setP("eeo_voluntary", "veteran_status", v)}   options={vetOpts} />
+          <Select label="Disability (your preference)" value={eeo.disability_status || "I do not wish to answer"} onChange={(v) => setP("eeo_voluntary", "disability_status", v)} options={disabilityOpts} />
         </div>
       </Section>
 
