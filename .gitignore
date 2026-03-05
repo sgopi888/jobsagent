@@ -1,3 +1,11 @@
+# Virtual environment
+.venv/
+venv/
+
+# Local data directories (contain credentials, DB, resumes)
+.applypilot/
+.applypilot_test*/
+
 # User data (NEVER commit)
 profile.json
 resume.txt
