@@ -1,18 +1,19 @@
 // SQLite read-only connection via better-sqlite3
+// NOTE: Open a fresh connection each call so the Python backend's writes
+// are always visible. SQLite WAL mode handles concurrent readers safely.
+// Keeping a singleton caused stale reads when Python updated applied_at etc.
 
 import Database from "better-sqlite3";
 import { paths } from "./paths";
 import type { Job, Stats } from "./types";
 
+/** @deprecated kept for backward compat — no longer a singleton */
 let _db: Database.Database | null = null;
 
 function getDb(): Database.Database {
-  if (!_db) {
-    _db = new Database(paths.db, { readonly: true, fileMustExist: true });
-    _db.pragma("journal_mode = WAL");
-    _db.pragma("busy_timeout = 5000");
-  }
-  return _db;
+  // Always open fresh — avoids stale reads when Python writes to the DB.
+  // better-sqlite3 opens instantly (no TCP handshake) so this is negligible.
+  return new Database(paths.db, { readonly: true, fileMustExist: true });
 }
 
 function getWriteDb(): Database.Database {
@@ -107,15 +108,15 @@ export function getStats(): Stats {
     )
     .all() as { url: string; title: string; site: string; applied_at: string }[];
 
-  return {
+  const stats: Stats = {
     total,
-    by_site: bySite.map((r) => [r.site, r.cnt]),
+    by_site: bySite.map((r) => [r.site, r.cnt] as [string, number]),
     pending_detail: pendingDetail,
     with_description: withDescription,
     detail_errors: detailErrors,
     scored,
     unscored,
-    score_distribution: scoreDist.map((r) => [r.fit_score, r.cnt]),
+    score_distribution: scoreDist.map((r) => [r.fit_score, r.cnt] as [number, number]),
     tailored,
     untailored_eligible: untailoredEligible,
     tailor_exhausted: tailorExhausted,
@@ -126,6 +127,8 @@ export function getStats(): Stats {
     ready_to_apply: readyToApply,
     applied_jobs: appliedJobs,
   };
+  db.close();
+  return stats;
 }
 
 // --- Jobs ---
@@ -177,7 +180,12 @@ export function getJobs(params: JobQueryParams = {}): Job[] {
         conditions.push("applied_at IS NOT NULL");
         break;
       case "failed":
-        conditions.push("apply_error IS NOT NULL AND apply_status != 'pending_verification'");
+        // Catch all failed states: explicit error, or status=failed without error,
+        // or jobs where attempts maxed out (apply_attempts >= 99 means permanent fail)
+        conditions.push(
+          "(apply_status = 'failed' OR (apply_error IS NOT NULL AND applied_at IS NULL))" +
+          " AND COALESCE(apply_status,'') != 'pending_verification'"
+        );
         break;
       case "pending_verification":
         conditions.push("apply_status = 'pending_verification'");
@@ -188,15 +196,24 @@ export function getJobs(params: JobQueryParams = {}): Job[] {
   const limit = params.limit || 100;
   const offset = params.offset || 0;
 
-  const sql = `SELECT * FROM jobs WHERE ${conditions.join(" AND ")} ORDER BY fit_score DESC NULLS LAST, discovered_at DESC LIMIT ? OFFSET ?`;
+  // Sort applied jobs by most-recently-applied first; everything else by score
+  const orderBy = params.status === "applied"
+    ? "applied_at DESC"
+    : "fit_score DESC NULLS LAST, discovered_at DESC";
+
+  const sql = `SELECT * FROM jobs WHERE ${conditions.join(" AND ")} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
   values.push(limit, offset);
 
-  return db.prepare(sql).all(...values) as Job[];
+  const result = db.prepare(sql).all(...values) as Job[];
+  db.close();
+  return result;
 }
 
 export function getJob(url: string): Job | undefined {
   const db = getDb();
-  return db.prepare("SELECT * FROM jobs WHERE url = ?").get(url) as Job | undefined;
+  const job = db.prepare("SELECT * FROM jobs WHERE url = ?").get(url) as Job | undefined;
+  db.close();
+  return job;
 }
 
 export function insertJob(url: string, title?: string, location?: string, description?: string, site?: string): boolean {
@@ -244,7 +261,7 @@ export function getPipelineStatus(minScore = 7): Record<string, number> {
   const pending_cover = (db.prepare("SELECT COUNT(*) as c FROM jobs WHERE tailored_resume_path IS NOT NULL AND (cover_letter_path IS NULL OR cover_letter_path = '') AND COALESCE(cover_attempts, 0) < 5").get() as { c: number }).c;
   const pending_pdf = (db.prepare("SELECT COUNT(*) as c FROM jobs WHERE tailored_resume_path IS NOT NULL AND tailored_resume_path LIKE '%.txt'").get() as { c: number }).c;
 
-  return {
+  const status = {
     discover: 0,
     enrich: pending_enrich,
     score: pending_score,
@@ -252,12 +269,11 @@ export function getPipelineStatus(minScore = 7): Record<string, number> {
     cover: pending_cover,
     pdf: pending_pdf,
   };
+  db.close();
+  return status;
 }
 
-// Invalidate cached read-only db on writes
+// No-op — kept for backward compat. Each getDb() call now opens fresh.
 export function invalidateCache() {
-  if (_db) {
-    _db.close();
-    _db = null;
-  }
+  if (_db) { try { _db.close(); } catch { /**/ } _db = null; }
 }
