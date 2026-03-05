@@ -225,8 +225,8 @@ def collect_detail_intelligence(page) -> dict:
 # -- Tier 1: JSON-LD extraction -----------------------------------------------
 
 def extract_from_json_ld(intel: dict) -> dict | None:
-    """Extract description and apply URL from JSON-LD JobPosting.
-    Returns {"full_description": str, "application_url": str|None} or None."""
+    """Extract description, title, and apply URL from JSON-LD JobPosting.
+    Returns {"full_description": str, "title": str|None, "application_url": str|None} or None."""
 
     def find_job_posting(data):
         if isinstance(data, dict):
@@ -267,10 +267,16 @@ def extract_from_json_ld(intel: dict) -> dict | None:
         if not apply_url:
             apply_url = posting.get("url")
 
-        return {
-            "full_description": desc_clean,
-            "application_url": apply_url,
+        result = {
+            "full_description": sanitize_content(posting.get("description", "")),
+            "title": posting.get("title"),
+            "application_url": None,
         }
+
+        # The original code had a check for description length, which is now handled by sanitize_content
+        # and the overall logic of the calling function.
+        # The apply_url is now handled by a separate tier.
+        return result
 
     return None
 
@@ -291,6 +297,9 @@ APPLY_SELECTORS = [
     'a[class*="btn-apply"]',
     'a[class*="apply-btn"]',
     'a[class*="apply-button"]',
+    '#grnhse_app a.btn-apply',
+    '.gh_jid-apply-button a',
+    '#gh_jid-apply',
 ]
 
 DESCRIPTION_SELECTORS = [
@@ -317,6 +326,9 @@ DESCRIPTION_SELECTORS = [
     'main article',
     'article[class*="job"]',
     '.job-posting-content',
+    '#grnhse_app #content',
+    '#grnhse_app .job-description',
+    '[id*="gh_jid"] .description',
 ]
 
 
@@ -374,17 +386,11 @@ DETAIL_EXTRACT_PROMPT = """You are extracting job details from a single job post
 PAGE URL: {url}
 PAGE TITLE: {title}
 
-Find TWO things in the HTML below:
-1. The full job description text (responsibilities, requirements, etc.)
-2. The URL of the "Apply" button/link
-
-Rules:
-- For description: extract the FULL text. Include all sections (About, Responsibilities, Requirements, etc.)
-- For apply URL: find the href of the link/button that starts the application process
-- If you cannot find one, set it to null
+3. The exact Job Title (e.g. "Senior AI Engineer")
+- If you can't find one, leave it null
 
 Return ONLY valid JSON:
-{{"full_description": "the complete job description text here", "application_url": "https://..." or null}}
+{{"full_description": "...", "application_url": "...", "title": "..."}}
 
 No explanation, no markdown. Keep reasoning under 20 words.
 
@@ -532,6 +538,7 @@ def scrape_detail_page(page, url: str) -> dict:
     """Full cascade for one detail page."""
     result: dict = {
         "full_description": None,
+        "title": None,
         "application_url": None,
         "status": "error",
         "tier_used": None,
@@ -560,6 +567,7 @@ def scrape_detail_page(page, url: str) -> dict:
         return result
 
     intel = collect_detail_intelligence(page)
+    result["title"] = intel.get("page_title")
 
     # Tier 1: JSON-LD
     json_ld_result = extract_from_json_ld(intel)
@@ -592,6 +600,8 @@ def scrape_detail_page(page, url: str) -> dict:
     llm_result = extract_with_llm(page, url)
     result["full_description"] = llm_result.get("full_description")
     result["application_url"] = llm_result.get("application_url") or tier2_apply
+    if llm_result.get("title"):
+        result["title"] = llm_result.get("title")
     result["tier_used"] = 3
 
     if result.get("full_description"):
@@ -663,6 +673,13 @@ def scrape_site_batch(
 
                 if status in ("ok", "partial"):
                     stats[status] += 1
+                    # Update title if it's currently generic
+                    if title == "Unknown Role" and result.get("title"):
+                        conn.execute(
+                            "UPDATE jobs SET title = ? WHERE url = ?",
+                            (result["title"], url)
+                        )
+
                     conn.execute(
                         "UPDATE jobs SET full_description = ?, application_url = ?, "
                         "detail_scraped_at = ?, detail_error = NULL WHERE url = ?",
@@ -693,6 +710,7 @@ def _run_detail_scraper(
     sites: list[str] | None = None,
     max_per_site: int | None = None,
     workers: int = 1,
+    target_url: str | None = None,
 ) -> dict:
     """Groups pending jobs by site and processes each batch.
 
@@ -704,8 +722,14 @@ def _run_detail_scraper(
     """
     skip_filter = " AND ".join(f"site != '{s}'" for s in SKIP_DETAIL_SITES)
     where = f"WHERE detail_scraped_at IS NULL AND {skip_filter}"
+    params: list = []
+    
+    if target_url:
+        where += " AND url = ?"
+        params.append(target_url)
+        
     rows = conn.execute(
-        f"SELECT url, title, site FROM jobs {where} ORDER BY site"
+        f"SELECT url, title, site FROM jobs {where} ORDER BY site", params
     ).fetchall()
 
     if not rows:
@@ -743,7 +767,6 @@ def _run_detail_scraper(
         # DB connection (conn=None tells scrape_site_batch to create one)
         def _scrape_site(site: str) -> dict:
             jobs = site_jobs[site]
-            delay = SITE_DELAYS.get(site, 2.0)
             log.info("%s -- %d jobs (delay=%.1fs)", site, len(jobs), delay)
             stats = scrape_site_batch(None, site, jobs, delay=delay, max_jobs=max_per_site)
             log.info("%s summary: %d ok, %d partial, %d error | T1=%d T2=%d T3=%d",
@@ -855,7 +878,7 @@ def stream_detail(
 
 # -- Public entry point ------------------------------------------------------
 
-def run_enrichment(limit: int = 100, workers: int = 1) -> dict:
+def run_enrichment(limit: int = 100, workers: int = 1, target_url: str | None = None) -> dict:
     """Main entry point for detail page enrichment.
 
     Fetches pending jobs from the database (those without full_description),
@@ -865,6 +888,7 @@ def run_enrichment(limit: int = 100, workers: int = 1) -> dict:
     Args:
         limit: Maximum number of jobs per site to process.
         workers: Number of parallel threads for site batch processing. Default 1 (sequential).
+        target_url: Filter by a specific job URL.
 
     Returns:
         Dict with stats: processed, ok, partial, error, tiers.
@@ -889,6 +913,6 @@ def run_enrichment(limit: int = 100, workers: int = 1) -> dict:
             log.info("WTTJ: %d URLs updated", updated)
 
     # Run the detail scraper
-    stats = _run_detail_scraper(conn, max_per_site=limit, workers=workers)
+    stats = _run_detail_scraper(conn, max_per_site=limit, workers=workers, target_url=target_url)
 
     return stats

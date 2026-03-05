@@ -110,33 +110,33 @@ def _run_discover(workers: int = 1) -> dict:
     return stats
 
 
-def _run_enrich(workers: int = 1) -> dict:
+def _run_enrich(workers: int = 1, target_url: str | None = None) -> dict:
     """Stage: Detail enrichment — scrape full descriptions and apply URLs."""
     try:
         from applypilot.enrichment.detail import run_enrichment
-        run_enrichment(workers=workers)
+        run_enrichment(workers=workers, target_url=target_url)
         return {"status": "ok"}
     except Exception as e:
         log.error("Enrichment failed: %s", e)
         return {"status": f"error: {e}"}
 
 
-def _run_score() -> dict:
+def _run_score(target_url: str | None = None) -> dict:
     """Stage: LLM scoring — assign fit scores 1-10."""
     try:
         from applypilot.scoring.scorer import run_scoring
-        run_scoring()
+        run_scoring(target_url=target_url)
         return {"status": "ok"}
     except Exception as e:
         log.error("Scoring failed: %s", e)
         return {"status": f"error: {e}"}
 
 
-def _run_tailor(min_score: int = 7, validation_mode: str = "normal") -> dict:
+def _run_tailor(min_score: int = 7, validation_mode: str = "normal", target_url: str | None = None) -> dict:
     """Stage: Resume tailoring — generate tailored resumes for high-fit jobs."""
     try:
         from applypilot.scoring.tailor import run_tailoring
-        run_tailoring(min_score=min_score, validation_mode=validation_mode)
+        run_tailoring(min_score=min_score, validation_mode=validation_mode, target_url=target_url)
         return {"status": "ok"}
     except Exception as e:
         log.error("Tailoring failed: %s", e)
@@ -335,7 +335,8 @@ def _run_stage_streaming(
 # ---------------------------------------------------------------------------
 
 def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
-                    validation_mode: str = "normal") -> dict:
+                    validation_mode: str = "normal",
+                    target_url: str | None = None) -> dict:
     """Execute stages one at a time (original behavior)."""
     results: list[dict] = []
     errors: dict[str, str] = {}
@@ -358,6 +359,9 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
                 kwargs["validation_mode"] = validation_mode
             if name in ("discover", "enrich"):
                 kwargs["workers"] = workers
+            if name in ("enrich", "score", "tailor"):
+                kwargs["target_url"] = target_url
+            
             result = runner(**kwargs)
             elapsed = time.time() - t0
 
@@ -372,6 +376,12 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
                     if sub_errors:
                         status = "partial"
 
+        except KeyboardInterrupt:
+            elapsed = time.time() - t0
+            status = "stopped"
+            results.append({"stage": name, "status": status, "elapsed": elapsed})
+            console.print(f"\n  [yellow]Stopped by user.[/yellow]")
+            return {"stages": results, "errors": errors, "elapsed": time.time() - pipeline_start}
         except Exception as e:
             elapsed = time.time() - t0
             status = f"error: {e}"
@@ -459,6 +469,7 @@ def run_pipeline(
     stream: bool = False,
     workers: int = 1,
     validation_mode: str = "normal",
+    target_url: str | None = None,
 ) -> dict:
     """Run pipeline stages.
 
@@ -468,6 +479,7 @@ def run_pipeline(
         dry_run: If True, preview stages without executing.
         stream: If True, run stages concurrently (streaming mode).
         workers: Number of parallel threads for discovery/enrichment stages.
+        target_url: Filter by a specific job URL.
 
     Returns:
         Dict with keys: stages (list of result dicts), errors (dict), elapsed (float).
@@ -512,7 +524,8 @@ def run_pipeline(
                                 validation_mode=validation_mode)
     else:
         result = _run_sequential(ordered, min_score, workers=workers,
-                                 validation_mode=validation_mode)
+                                 validation_mode=validation_mode,
+                                 target_url=target_url)
 
     # Summary table
     console.print(f"\n{'=' * 70}")

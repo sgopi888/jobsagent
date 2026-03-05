@@ -365,6 +365,7 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
 def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
                       stage: str = "discovered",
                       min_score: int | None = None,
+                      target_url: str | None = None,
                       limit: int = 100) -> list[dict]:
     """Fetch jobs filtered by pipeline stage.
 
@@ -372,6 +373,7 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
         conn: Database connection. Uses get_connection() if None.
         stage: One of "discovered", "enriched", "scored", "tailored", "applied".
         min_score: Minimum fit_score filter (only relevant for scored+ stages).
+        target_url: Filter by a specific job URL.
         limit: Maximum number of rows to return.
 
     Returns:
@@ -409,6 +411,10 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
     if min_score is not None and "fit_score" not in where and stage in ("scored", "tailored", "applied"):
         where += " AND fit_score >= ?"
         params.append(min_score)
+
+    if target_url:
+        where += " AND url = ?"
+        params.append(target_url)
 
     query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC NULLS LAST, discovered_at DESC"
     if limit > 0:

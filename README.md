@@ -69,6 +69,11 @@ Each stage is independent. Run them all or pick what you need.
 
 ---
 
+## LLM Setup Guide
+- [LLM Configuration Guide](LLM_GUIDE.md) — Step-by-step for Ollama (Gemma), OpenAI, and Gemini.
+
+---
+
 ## ApplyPilot vs The Alternatives
 
 | Feature | ApplyPilot | AIHawk | Manual |

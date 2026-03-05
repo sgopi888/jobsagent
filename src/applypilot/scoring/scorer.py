@@ -101,12 +101,13 @@ def score_job(resume_text: str, job: dict) -> dict:
         return {"score": 0, "keywords": "", "reasoning": f"LLM error: {e}"}
 
 
-def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
+def run_scoring(limit: int = 0, rescore: bool = False, target_url: str | None = None) -> dict:
     """Score unscored jobs that have full descriptions.
 
     Args:
         limit: Maximum number of jobs to score in this run.
         rescore: If True, re-score all jobs (not just unscored ones).
+        target_url: Filter by a specific job URL.
 
     Returns:
         {"scored": int, "errors": int, "elapsed": float, "distribution": list}
@@ -120,7 +121,7 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
             query += f" LIMIT {limit}"
         jobs = conn.execute(query).fetchall()
     else:
-        jobs = get_jobs_by_stage(conn=conn, stage="pending_score", limit=limit)
+        jobs = get_jobs_by_stage(conn=conn, stage="pending_score", limit=limit, target_url=target_url)
 
     if not jobs:
         log.info("No unscored jobs with descriptions found.")

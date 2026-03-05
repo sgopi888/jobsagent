@@ -436,8 +436,9 @@ def url(
     # ── Step 2: enrich → score → tailor ─────────────────────────────────────
     console.print("\n[bold]Step 2/3:[/bold] Running enrich → score → tailor...")
     from applypilot.pipeline import run_pipeline as _run_pipeline
-    result = _run_pipeline(stages=["enrich", "score", "tailor"], min_score=7, dry_run=False,
-                           stream=False, workers=1, validation_mode="normal")
+    result = _run_pipeline(stages=["enrich", "score", "tailor"], min_score=0, dry_run=False,
+                           stream=False, workers=1, validation_mode="normal",
+                           target_url=job_url)
 
     if result.get("errors"):
         console.print("[red]Pipeline had errors — aborting apply.[/red]")
@@ -449,7 +450,7 @@ def url(
     apply_main(
         limit=1,
         target_url=job_url,
-        min_score=7,
+        min_score=0,
         headless=headless,
         model=model,
         dry_run=dry_run,

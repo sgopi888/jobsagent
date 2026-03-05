@@ -417,21 +417,9 @@ def tailor_resume(
             avoid_notes.extend(validation["errors"])
             if attempt < max_retries:
                 continue
-            # Last attempt — check if errors are only soft structural issues
-            # (company/education missing from JSON headers) vs hard fabrication/missing fields.
-            # If the resume content was actually generated (JSON parsed OK), save it
-            # as approved_with_warning instead of discarding it entirely.
-            hard_errors = [e for e in validation["errors"] if not (
-                e.startswith("Company '") or e.startswith("Education '")
-            )]
+            # Last attempt — validation still failed, reject the output
             tailored = assemble_resume_text(data, profile)
-            if hard_errors:
-                # Truly broken output (missing fields, fabrication, LLM self-talk)
-                report["status"] = "failed_validation"
-            else:
-                # Only structural label mismatches — resume content is real, accept it
-                report["status"] = "approved_with_judge_warning"
-                report["validator"]["warnings"].extend(validation["errors"])
+            report["status"] = "failed_validation"
             return tailored, report
 
         # Assemble text (header injected by code, em dashes auto-fixed)
@@ -467,13 +455,15 @@ def tailor_resume(
 # ── Batch Entry Point ────────────────────────────────────────────────────
 
 def run_tailoring(min_score: int = 7, limit: int = 20,
-                  validation_mode: str = "normal") -> dict:
+                  validation_mode: str = "normal",
+                  target_url: str | None = None) -> dict:
     """Generate tailored resumes for high-scoring jobs.
 
     Args:
         min_score:       Minimum fit_score to tailor for.
         limit:           Maximum jobs to process.
         validation_mode: "strict", "normal", or "lenient".
+        target_url:      Filter by a specific job URL.
 
     Returns:
         {"approved": int, "failed": int, "errors": int, "elapsed": float}
@@ -482,7 +472,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     resume_text = RESUME_PATH.read_text(encoding="utf-8")
     conn = get_connection()
 
-    jobs = get_jobs_by_stage(conn=conn, stage="pending_tailor", min_score=min_score, limit=limit)
+    jobs = get_jobs_by_stage(conn=conn, stage="pending_tailor", min_score=min_score, limit=limit, target_url=target_url)
 
     if not jobs:
         log.info("No untailored jobs with score >= %d.", min_score)
