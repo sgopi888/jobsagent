@@ -186,8 +186,9 @@ LLM_ENV_VARS = {
 }
 
 # Default model names per provider (used when LLM_MODEL is not set)
+# gemini-2.5-flash-lite: verified working 2025, cheapest + fast. gemini-2.0-flash-lite deprecated for new keys.
 LLM_DEFAULTS = {
-    "gemini_model":  "gemini-2.0-flash-lite",   # Gemini free tier, fast + cheap
+    "gemini_model":  "gemini-2.5-flash-lite",   # Gemini free tier, fast + cheap (2.5 series)
     "openai_model":  "gpt-4o-mini",             # OpenAI cheapest capable model
     "ollama_model":  "gemma3:latest",           # Local fallback via Ollama
     "local_model":   "local-model",             # Generic local endpoint placeholder
