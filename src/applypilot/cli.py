@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -256,6 +257,68 @@ def apply(
     )
 
 
+def _reset_job_in_db(url: str) -> None:
+    """Wipe all pipeline state for a URL so it re-runs from scratch.
+
+    Clears enrich, score, tailor, cover, and apply columns.
+    Also deletes any stale tailored resume / cover letter files on disk.
+    Leaves url/title/site/discovered_at intact so the job row stays.
+    """
+    import glob as _glob
+    from applypilot.config import TAILORED_DIR, COVER_LETTER_DIR
+    from applypilot.database import get_connection
+
+    conn = get_connection()
+
+    # Grab existing file paths before we null them
+    row = conn.execute(
+        "SELECT tailored_resume_path, cover_letter_path FROM jobs WHERE url = ?", (url,)
+    ).fetchone()
+
+    conn.execute(
+        """
+        UPDATE jobs SET
+            full_description  = NULL,
+            detail_scraped_at = NULL,
+            detail_error      = NULL,
+            fit_score         = NULL,
+            score_reasoning   = NULL,
+            scored_at         = NULL,
+            tailored_resume_path = NULL,
+            tailored_at       = NULL,
+            tailor_attempts   = 0,
+            cover_letter_path = NULL,
+            cover_letter_at   = NULL,
+            cover_attempts    = 0,
+            applied_at        = NULL,
+            apply_status      = NULL,
+            apply_error       = NULL,
+            apply_attempts    = 0,
+            agent_id          = NULL,
+            last_attempted_at = NULL,
+            apply_duration_ms = NULL,
+            apply_task_id     = NULL,
+            verification_confidence = NULL
+        WHERE url = ?
+        """,
+        (url,),
+    )
+    conn.commit()
+
+    # Delete stale files on disk (txt, pdf, REPORT.json, JOB.txt, cover letter)
+    if row:
+        for fpath in (row[0], row[1]):  # tailored_resume_path, cover_letter_path
+            if fpath:
+                p = Path(fpath)
+                stem = p.stem  # e.g. "Manual_Samsara_Role"
+                parent = p.parent
+                for f in parent.glob(f"{stem}*"):
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+
+
 def _add_job_to_db(url: str, title: Optional[str], company: Optional[str],
                    location: Optional[str], description: Optional[str]) -> tuple[bool, str]:
     """Insert a job URL into the DB. Returns (was_inserted, company_name).
@@ -361,13 +424,14 @@ def url(
 
     console.print(f"\n[bold blue]⚡ Auto-Pilot:[/bold blue] {job_url}\n")
 
-    # ── Step 1: Add to DB ────────────────────────────────────────────────────
-    console.print("[bold]Step 1/3:[/bold] Adding job to database...")
+    # ── Step 1: Reset + Add to DB ────────────────────────────────────────────
+    console.print("[bold]Step 1/3:[/bold] Resetting job state and adding to database...")
+    _reset_job_in_db(job_url)  # wipe any prior enrich/score/tailor/apply state
     inserted, company_name = _add_job_to_db(job_url, title, company, location, None)
     if inserted:
-        console.print(f"  [green]✓ Added[/green] @ {company_name}")
+        console.print(f"  [green]✓ Added fresh[/green] @ {company_name}")
     else:
-        console.print(f"  [yellow]⚠ Already in DB[/yellow] — skipping insert, continuing pipeline")
+        console.print(f"  [green]✓ Reset[/green] @ {company_name} — starting from scratch")
 
     # ── Step 2: enrich → score → tailor ─────────────────────────────────────
     console.print("\n[bold]Step 2/3:[/bold] Running enrich → score → tailor...")
@@ -392,6 +456,94 @@ def url(
         continuous=False,
         workers=1,
     )
+
+
+@app.command()
+def verify(
+    job_url: str = typer.Argument(..., help="Job URL that is pending verification."),
+    code: str = typer.Argument(..., help="Verification code from email."),
+    model: str = typer.Option("haiku", "--model", "-m", help="Claude model to use."),
+) -> None:
+    """Enter an email verification code to complete a pending application."""
+    _bootstrap()
+
+    from applypilot.config import check_tier
+    check_tier(3, "verify")
+
+    console.print(f"\n[bold blue]🔑 Entering verification code for:[/bold blue] {job_url}\n")
+
+    from applypilot.apply import chrome as chrome_mod, prompt as prompt_mod
+    from applypilot.apply.chrome import BASE_CDP_PORT
+    from applypilot.apply.dashboard import init_worker, update_state, add_event
+    import subprocess as _sp
+    import json as _json
+
+    worker_id = 0
+    port = BASE_CDP_PORT + worker_id
+    init_worker(worker_id)
+    update_state(worker_id, status="applying", last_action="entering verification code")
+
+    mcp_config_path = config.APP_DIR / f".mcp-apply-{worker_id}.json"
+    from applypilot.apply.launcher import _make_mcp_config
+    mcp_config_path.write_text(_json.dumps(_make_mcp_config(port)), encoding="utf-8")
+
+    enter_code_prompt = (
+        f"The browser is already open on a verification code page for a job application.\n"
+        f"Find the verification code input field(s) — there may be multiple boxes for individual digits.\n"
+        f"Enter this code: {code}\n"
+        f"Then click Submit / Verify / Continue.\n"
+        f"After submitting, look for a 'thank you' or 'application received' confirmation.\n"
+        f"If successful, output RESULT:APPLIED.\n"
+        f"If the code was rejected or expired, output RESULT:FAILED:verification_failed.\n"
+    )
+
+    env2 = __import__("os").environ.copy()
+    env2.pop("CLAUDECODE", None)
+    env2.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    worker_dir = config.APPLY_WORKER_DIR / f"worker-{worker_id}"
+    worker_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "claude", "--model", model, "-p",
+        "--mcp-config", str(mcp_config_path),
+        "--permission-mode", "bypassPermissions",
+        "--no-session-persistence",
+        "--output-format", "stream-json", "--verbose", "-",
+    ]
+    proc = _sp.Popen(
+        cmd, stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.STDOUT,
+        text=True, encoding="utf-8", errors="replace", env=env2, cwd=str(worker_dir),
+    )
+    proc.stdin.write(enter_code_prompt)
+    proc.stdin.close()
+
+    out_parts = []
+    for ln in proc.stdout:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            m = _json.loads(ln)
+            if m.get("type") == "assistant":
+                for blk in m.get("message", {}).get("content", []):
+                    if blk.get("type") == "text":
+                        txt = blk["text"]
+                        out_parts.append(txt)
+                        console.print(txt, end="")
+            elif m.get("type") == "result":
+                out_parts.append(m.get("result", ""))
+        except _json.JSONDecodeError:
+            out_parts.append(ln)
+    proc.wait(timeout=120)
+
+    output = "\n".join(out_parts)
+    from applypilot.apply.launcher import mark_result
+    if "RESULT:APPLIED" in output:
+        console.print("\n[green bold]✓ Application verified and submitted![/green bold]")
+        mark_result(job_url, "applied")
+    else:
+        console.print("\n[red]✗ Verification failed — job marked for retry.[/red]")
+        mark_result(job_url, "failed", "verification_code_failed", permanent=False)
 
 
 @app.command()

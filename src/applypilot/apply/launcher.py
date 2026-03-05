@@ -467,6 +467,14 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         def _clean_reason(s: str) -> str:
             return re.sub(r'[*`"]+$', '', s).strip()
 
+        # Email verification needed — keep Chrome open, prompt user, re-enter code
+        if "RESULT:NEEDS_VERIFICATION" in output:
+            title_str = job.get('title') or "Unknown Title"
+            add_event(f"[W{worker_id}] NEEDS_VERIFICATION ({elapsed}s): {title_str[:30]}")
+            update_state(worker_id, status="needs_verification",
+                         last_action=f"waiting for verification code ({elapsed}s)")
+            return "needs_verification", duration_ms
+
         for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
             if f"RESULT:{result_status}" in output:
                 title_str = job.get('title') or "Unknown Title"
@@ -608,11 +616,104 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
             result, duration_ms = run_job(job, port=port, worker_id=worker_id,
                                             model=model, dry_run=dry_run)
 
+            keep_chrome = False
             if result == "skipped":
                 release_lock(job["url"])
                 title_str = job.get('title') or "Unknown Title"
                 add_event(f"[W{worker_id}] Skipped: {title_str[:30]}")
                 continue
+            elif result == "needs_verification":
+                # Keep Chrome open — prompt terminal — re-run Claude to enter code
+                keep_chrome = True
+                _email = job.get("_profile_email", "your email")
+                console.print(
+                    f"\n[yellow bold]⏸  Email Verification Required[/yellow bold]\n"
+                    f"[dim]The site sent a verification code to [bold]{_email}[/bold].\n"
+                    f"Check your inbox now and paste the code below.[/dim]\n"
+                )
+                try:
+                    verification_code = input("  Enter verification code: ").strip()
+                except EOFError:
+                    verification_code = ""
+
+                if verification_code:
+                    add_event(f"[W{worker_id}] Re-launching to enter code...")
+                    update_state(worker_id, status="applying",
+                                 last_action="entering verification code")
+                    # Build a targeted prompt to just enter the code
+                    enter_code_prompt = (
+                        f"The browser is open on a verification code page.\n"
+                        f"Find the verification code input field(s) and enter this code: {verification_code}\n"
+                        f"Then click Submit/Verify/Continue.\n"
+                        f"If successful, output RESULT:APPLIED. If failed, output RESULT:FAILED:verification_failed."
+                    )
+                    mcp_config_path = config.APP_DIR / f".mcp-apply-{worker_id}.json"
+                    cmd2 = [
+                        "claude", "--model", model, "-p",
+                        "--mcp-config", str(mcp_config_path),
+                        "--permission-mode", "bypassPermissions",
+                        "--no-session-persistence",
+                        "--output-format", "stream-json", "--verbose", "-",
+                    ]
+                    env2 = os.environ.copy()
+                    env2.pop("CLAUDECODE", None); env2.pop("CLAUDE_CODE_ENTRYPOINT", None)
+                    worker_dir = config.APP_DIR / "apply-workers" / f"worker-{worker_id}"
+                    proc2 = subprocess.Popen(
+                        cmd2, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                        errors="replace", env=env2, cwd=str(worker_dir),
+                    )
+                    with _claude_lock:
+                        _claude_procs[worker_id] = proc2
+                    proc2.stdin.write(enter_code_prompt)
+                    proc2.stdin.close()
+                    out2_parts = []
+                    for ln in proc2.stdout:
+                        ln = ln.strip()
+                        if not ln: continue
+                        try:
+                            m = json.loads(ln)
+                            if m.get("type") == "assistant":
+                                for blk in m.get("message", {}).get("content", []):
+                                    if blk.get("type") == "text":
+                                        out2_parts.append(blk["text"])
+                            elif m.get("type") == "result":
+                                out2_parts.append(m.get("result", ""))
+                        except json.JSONDecodeError:
+                            out2_parts.append(ln)
+                    proc2.wait(timeout=120)
+                    with _claude_lock:
+                        _claude_procs.pop(worker_id, None)
+                    out2 = "\n".join(out2_parts)
+                    if "RESULT:APPLIED" in out2:
+                        mark_result(job["url"], "applied", duration_ms=duration_ms)
+                        applied += 1
+                        update_state(worker_id, jobs_applied=applied,
+                                     jobs_done=applied + failed)
+                        add_event(f"[W{worker_id}] APPLIED (verification complete)")
+                        console.print("[green bold]✓  Application submitted successfully![/green bold]\n")
+                    else:
+                        mark_result(job["url"], "failed", "verification_code_failed",
+                                    permanent=False, duration_ms=duration_ms)
+                        failed += 1
+                        update_state(worker_id, jobs_failed=failed,
+                                     jobs_done=applied + failed)
+                        console.print("[red]✗  Verification failed — marked for retry.[/red]\n")
+                else:
+                    # No code entered (EOFError from UI subprocess or user skipped in terminal).
+                    # Mark as pending_verification so the UI VerifyModal can complete it.
+                    # Chrome stays open (keep_chrome=True). The verify CLI command will
+                    # re-use the open browser when the user submits the code via the UI.
+                    mark_result(job["url"], "pending_verification", "awaiting_code",
+                                permanent=False, duration_ms=duration_ms)
+                    # Don't count as failed — job is still in progress via UI
+                    add_event(f"[W{worker_id}] NEEDS_VERIFICATION: {job.get('url', '')}")
+                    console.print(
+                        f"[yellow]No code entered — job marked [bold]pending_verification[/bold].\n"
+                        f"Open the UI, find this job in the Apply tab, and enter the code.[/yellow]\n"
+                    )
+                    # Break the loop — only one job awaiting verification at a time
+                    break
             elif result == "applied":
                 mark_result(job["url"], "applied", duration_ms=duration_ms)
                 applied += 1
@@ -642,7 +743,8 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
             failed += 1
             update_state(worker_id, jobs_failed=failed)
         finally:
-            if chrome_proc:
+            # Keep Chrome open only when waiting for human verification
+            if chrome_proc and not locals().get("keep_chrome", False):
                 cleanup_worker(worker_id, chrome_proc)
 
         jobs_done += 1

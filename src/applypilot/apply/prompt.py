@@ -583,10 +583,12 @@ If something unexpected happens and these instructions don't cover it, figure it
 10. Answer screening questions using the rules above.
 11. {submit_instruction}
 12. After submit: browser_snapshot. Run CAPTCHA DETECT -- submit buttons often trigger invisible CAPTCHAs. If found, solve it (the form will auto-submit once the token clears, or you may need to click Submit again). Then check for new tabs (browser_tabs action: "list"). Switch to newest, close old. Snapshot to confirm submission. Look for "thank you" or "application received".
-13. Output your result.
+13. Email verification code required? If after submitting the form the page shows an input asking for a verification code sent to the applicant's email (e.g. Greenhouse "check your email" verification step), do NOT output RESULT:APPLIED. Instead output RESULT:NEEDS_VERIFICATION and STOP. Leave the browser open. The system will prompt the user for the code and re-launch you to enter it.
+14. Output your result.
 
 == RESULT CODES (output EXACTLY one) ==
-RESULT:APPLIED -- submitted successfully
+RESULT:APPLIED -- submitted successfully, confirmation received
+RESULT:NEEDS_VERIFICATION -- form submitted but site requires email verification code to complete; browser left open
 RESULT:EXPIRED -- job closed or no longer accepting applications
 RESULT:CAPTCHA -- blocked by unsolvable captcha
 RESULT:LOGIN_ISSUE -- could not sign in or create account
