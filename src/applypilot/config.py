@@ -189,7 +189,7 @@ LLM_ENV_VARS = {
 LLM_DEFAULTS = {
     "gemini_model":  "gemini-2.5-flash-lite",   # Gemini free tier, fast + cheap
     "openai_model":  "gpt-5-nano",             # OpenAI cheapest capable model
-    "ollama_model":  "gemma2:latest",           # Local fallback via Ollama
+    "ollama_model":  "gemma3:latest",           # Local fallback via Ollama (vision-enabled, 4B)
     "local_model":   "local-model",             # Generic local endpoint placeholder
 }
 
