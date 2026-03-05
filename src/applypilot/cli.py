@@ -528,7 +528,8 @@ def doctor() -> None:
     
     if has_gemini or has_openai or has_local:
         provider = "Gemini" if has_gemini else ("OpenAI" if has_openai else "Local")
-        model = os.environ.get("LLM_MODEL", "gemini-2.0-flash" if has_gemini else "gpt-4o-mini")
+        from applypilot.config import LLM_DEFAULTS
+        model = os.environ.get("LLM_MODEL", LLM_DEFAULTS["gemini_model"] if has_gemini else LLM_DEFAULTS["openai_model"])
         
         # Test real connectivity
         try:

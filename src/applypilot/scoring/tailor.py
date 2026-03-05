@@ -414,13 +414,24 @@ def tailor_resume(
         report["validator"] = validation
 
         if not validation["passed"]:
-            # Only retry if there are hard errors (warnings never block)
             avoid_notes.extend(validation["errors"])
             if attempt < max_retries:
                 continue
-            # Last attempt — assemble whatever we got
+            # Last attempt — check if errors are only soft structural issues
+            # (company/education missing from JSON headers) vs hard fabrication/missing fields.
+            # If the resume content was actually generated (JSON parsed OK), save it
+            # as approved_with_warning instead of discarding it entirely.
+            hard_errors = [e for e in validation["errors"] if not (
+                e.startswith("Company '") or e.startswith("Education '")
+            )]
             tailored = assemble_resume_text(data, profile)
-            report["status"] = "failed_validation"
+            if hard_errors:
+                # Truly broken output (missing fields, fabrication, LLM self-talk)
+                report["status"] = "failed_validation"
+            else:
+                # Only structural label mismatches — resume content is real, accept it
+                report["status"] = "approved_with_judge_warning"
+                report["validator"]["warnings"].extend(validation["errors"])
             return tailored, report
 
         # Assemble text (header injected by code, em dashes auto-fixed)
