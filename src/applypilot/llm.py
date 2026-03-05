@@ -2,11 +2,13 @@
 Unified LLM client for ApplyPilot.
 
 Auto-detects provider from environment:
-  GEMINI_API_KEY  -> Google Gemini (default: gemini-2.0-flash)
+  GEMINI_API_KEY  -> Google Gemini (default: gemini-2.0-flash-lite)
   OPENAI_API_KEY  -> OpenAI (default: gpt-4o-mini)
   LLM_URL         -> Local llama.cpp / Ollama compatible endpoint
 
 LLM_MODEL env var overrides the model name for any provider.
+
+All provider/model defaults are defined ONCE in config.py (LLM_DEFAULTS, LLM_URLS).
 """
 
 import logging
@@ -14,6 +16,9 @@ import os
 import time
 
 import httpx
+
+# Import all LLM constants from the single source of truth in config.py
+from applypilot.config import LLM_DEFAULTS, LLM_URLS, LLM_ENV_VARS
 
 log = logging.getLogger(__name__)
 
@@ -26,36 +31,41 @@ def _detect_provider() -> tuple[str, str, str]:
 
     Reads env at call time (not module import time) so that load_env() called
     in _bootstrap() is always visible here.
+
+    Priority: GEMINI_API_KEY > OPENAI_API_KEY > LLM_URL (local/Ollama)
+    Model: LLM_MODEL env var overrides the provider default.
+    Defaults: defined in config.LLM_DEFAULTS — change there, not here.
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    local_url = os.environ.get("LLM_URL", "")
-    model_override = os.environ.get("LLM_MODEL", "")
+    gemini_key   = os.environ.get(LLM_ENV_VARS["gemini_key"], "")
+    openai_key   = os.environ.get(LLM_ENV_VARS["openai_key"], "")
+    local_url    = os.environ.get(LLM_ENV_VARS["llm_url"], "")
+    model_override = os.environ.get(LLM_ENV_VARS["llm_model"], "")
 
     if gemini_key and not local_url:
         return (
-            "https://generativelanguage.googleapis.com/v1beta/openai",
-            model_override or "gemini-2.0-flash",
+            LLM_URLS["gemini_compat"],
+            model_override or LLM_DEFAULTS["gemini_model"],
             gemini_key,
         )
 
     if openai_key and not local_url:
         return (
-            "https://api.openai.com/v1",
-            model_override or "gpt-4o-mini",
+            LLM_URLS["openai"],
+            model_override or LLM_DEFAULTS["openai_model"],
             openai_key,
         )
 
     if local_url:
         return (
             local_url.rstrip("/"),
-            model_override or "local-model",
-            os.environ.get("LLM_API_KEY", ""),
+            model_override or LLM_DEFAULTS["ollama_model"],
+            os.environ.get(LLM_ENV_VARS["llm_api_key"], ""),
         )
 
     raise RuntimeError(
         "No LLM provider configured. "
-        "Set GEMINI_API_KEY, OPENAI_API_KEY, or LLM_URL in your environment."
+        f"Set {LLM_ENV_VARS['gemini_key']}, {LLM_ENV_VARS['openai_key']}, "
+        f"or {LLM_ENV_VARS['llm_url']} in ~/.applypilot/.env"
     )
 
 
@@ -71,8 +81,8 @@ _TIMEOUT = 120  # seconds
 _RATE_LIMIT_BASE_WAIT = 10
 
 
-_GEMINI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-_GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta"
+_GEMINI_COMPAT_BASE = LLM_URLS["gemini_compat"]
+_GEMINI_NATIVE_BASE = LLM_URLS["gemini_native"]
 
 
 class LLMClient:

@@ -170,6 +170,37 @@ DEFAULTS = {
     "viewport": "1280x900",
 }
 
+# ---------------------------------------------------------------------------
+# LLM configuration — single source of truth for all provider/model defaults.
+# These are read by llm.py at runtime via os.environ (after load_env()).
+# Override any of these in ~/.applypilot/.env
+# ---------------------------------------------------------------------------
+
+# Environment variable names (never hardcode these strings elsewhere)
+LLM_ENV_VARS = {
+    "gemini_key":  "GEMINI_API_KEY",
+    "openai_key":  "OPENAI_API_KEY",
+    "llm_url":     "LLM_URL",       # OpenAI-compat endpoint (Ollama, llama.cpp, etc.)
+    "llm_api_key": "LLM_API_KEY",   # Optional key for local endpoint
+    "llm_model":   "LLM_MODEL",     # Override model name for any provider
+}
+
+# Default model names per provider (used when LLM_MODEL is not set)
+LLM_DEFAULTS = {
+    "gemini_model":  "gemini-2.0-flash-lite",   # Gemini free tier, fast + cheap
+    "openai_model":  "gpt-4o-mini",             # OpenAI cheapest capable model
+    "ollama_model":  "gemma3:latest",           # Local fallback via Ollama
+    "local_model":   "local-model",             # Generic local endpoint placeholder
+}
+
+# Provider base URLs
+LLM_URLS = {
+    "gemini_compat": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "gemini_native": "https://generativelanguage.googleapis.com/v1beta",
+    "openai":        "https://api.openai.com/v1",
+    "ollama":        "http://localhost:11434/v1",
+}
+
 
 def load_env():
     """Load environment variables from ~/.applypilot/.env if it exists."""
