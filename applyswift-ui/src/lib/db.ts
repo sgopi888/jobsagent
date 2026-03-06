@@ -4,19 +4,44 @@
 // Keeping a singleton caused stale reads when Python updated applied_at etc.
 
 import Database from "better-sqlite3";
+import { existsSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import { paths } from "./paths";
 import type { Job, Stats } from "./types";
 
 /** @deprecated kept for backward compat — no longer a singleton */
 let _db: Database.Database | null = null;
 
+function ensureDb() {
+  if (!existsSync(paths.db)) {
+    const dir = dirname(paths.db);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const db = new Database(paths.db);
+    db.pragma("journal_mode = WAL");
+    db.exec(`CREATE TABLE IF NOT EXISTS jobs(
+      url TEXT PRIMARY KEY,
+      title TEXT, salary TEXT, description TEXT, location TEXT,
+      site TEXT, strategy TEXT, discovered_at TEXT,
+      full_description TEXT, application_url TEXT,
+      detail_scraped_at TEXT, detail_error TEXT,
+      fit_score INTEGER, score_reasoning TEXT, scored_at TEXT,
+      tailored_resume_path TEXT, tailored_at TEXT, tailor_attempts INTEGER DEFAULT 0,
+      cover_letter_path TEXT, cover_letter_at TEXT, cover_attempts INTEGER DEFAULT 0,
+      applied_at TEXT, apply_status TEXT, apply_error TEXT, apply_attempts INTEGER DEFAULT 0,
+      agent_id TEXT, last_attempted_at TEXT, apply_duration_ms INTEGER,
+      apply_task_id TEXT, verification_confidence TEXT
+    )`);
+    db.close();
+  }
+}
+
 function getDb(): Database.Database {
-  // Always open fresh — avoids stale reads when Python writes to the DB.
-  // better-sqlite3 opens instantly (no TCP handshake) so this is negligible.
+  ensureDb();
   return new Database(paths.db, { readonly: true, fileMustExist: true });
 }
 
 function getWriteDb(): Database.Database {
+  ensureDb();
   const db = new Database(paths.db, { fileMustExist: true });
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
