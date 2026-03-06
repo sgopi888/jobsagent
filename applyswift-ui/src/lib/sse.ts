@@ -8,13 +8,22 @@ export function sseFromProcess(proc: ChildProcess): ReadableStream {
 
   return new ReadableStream({
     start(controller) {
+      let closed = false;
+
       function send(event: string, data: unknown) {
+        if (closed) return;
         const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
         try {
           controller.enqueue(encoder.encode(payload));
         } catch {
           // stream already closed
         }
+      }
+
+      function closeOnce() {
+        if (closed) return;
+        closed = true;
+        try { controller.close(); } catch { /* already closed */ }
       }
 
       proc.stdout?.on("data", (chunk: Buffer) => {
@@ -33,12 +42,12 @@ export function sseFromProcess(proc: ChildProcess): ReadableStream {
 
       proc.on("close", (code) => {
         send("done", { exitCode: code ?? 1 });
-        controller.close();
+        closeOnce();
       });
 
       proc.on("error", (err) => {
         send("error", { message: err.message });
-        controller.close();
+        closeOnce();
       });
     },
 

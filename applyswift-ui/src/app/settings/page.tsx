@@ -348,8 +348,10 @@ function ResumeTab() {
   };
 
   const handlePdfUpload = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      setUploadStatus({ ok: false, msg: "Only PDF files are accepted." });
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    const allowed = ["pdf", "txt", "text", "docx", "doc", "rtf"];
+    if (!allowed.includes(ext)) {
+      setUploadStatus({ ok: false, msg: `Unsupported format. Accepted: ${allowed.join(", ")}` });
       return;
     }
     setUploading(true);
@@ -388,7 +390,7 @@ function ResumeTab() {
 
       {/* PDF upload zone */}
       <div className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-5">
-        <h3 className="text-xs font-semibold uppercase tracking-widest text-cyan-400/70 mb-3">Upload Resume PDF</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-cyan-400/70 mb-3">Upload Resume</h3>
         <div
           onDrop={onDrop}
           onDragOver={(e) => e.preventDefault()}
@@ -398,17 +400,17 @@ function ResumeTab() {
           {uploading ? (
             <>
               <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
-              <p className="text-sm text-slate-400">Extracting text from PDF…</p>
+              <p className="text-sm text-slate-400">Extracting text…</p>
             </>
           ) : (
             <>
               <Upload className="w-8 h-8 text-slate-500" />
-              <p className="text-sm text-slate-400">Drag & drop a PDF, or <span className="text-cyan-400 underline">click to browse</span></p>
-              <p className="text-xs text-slate-600">Saves as resume.pdf + auto-extracts text</p>
+              <p className="text-sm text-slate-400">Drag & drop your resume, or <span className="text-cyan-400 underline">click to browse</span></p>
+              <p className="text-xs text-slate-600">Accepts PDF, DOCX, DOC, TXT, RTF — auto-extracts text</p>
             </>
           )}
         </div>
-        <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={onFileChange} />
+        <input ref={fileRef} type="file" accept=".pdf,.docx,.doc,.txt,.text,.rtf" className="hidden" onChange={onFileChange} />
         {uploadStatus && (
           <div className={`mt-3 text-sm flex items-center gap-2 ${uploadStatus.ok ? "text-emerald-400" : "text-rose-400"}`}>
             {uploadStatus.ok ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
