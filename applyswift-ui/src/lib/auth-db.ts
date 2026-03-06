@@ -2,13 +2,22 @@
 
 import Database from "better-sqlite3";
 import { randomBytes, randomUUID } from "crypto";
+import { mkdirSync, existsSync } from "fs";
+import { dirname } from "path";
 import { paths } from "./paths";
 
 let _db: Database.Database | null = null;
 
+// Allow server to override auth DB path via env var
+const AUTH_DB_PATH = process.env.AUTH_DB_PATH || paths.authDb;
+
 function getAuthDb(): Database.Database {
   if (!_db) {
-    _db = new Database(paths.authDb);
+    const dir = dirname(AUTH_DB_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    _db = new Database(AUTH_DB_PATH);
     _db.pragma("journal_mode = WAL");
     _db.pragma("busy_timeout = 5000");
     _db.pragma("foreign_keys = ON");
