@@ -8,6 +8,7 @@ const APP_DIR = process.env.APPLYPILOT_DIR || join(homedir(), ".applypilot");
 export const paths = {
   appDir: APP_DIR,
   db: join(APP_DIR, "applypilot.db"),
+  authDb: join(APP_DIR, "auth.db"),
   profile: join(APP_DIR, "profile.json"),
   resume: join(APP_DIR, "resume.txt"),
   resumePdf: join(APP_DIR, "resume.pdf"),

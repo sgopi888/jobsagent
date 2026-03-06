@@ -7,6 +7,7 @@ import {
   ChevronLeft, ChevronRight, LayoutDashboard,
 } from "lucide-react";
 import { useState } from "react";
+import UserMenu from "./UserMenu";
 
 const NAV = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -121,16 +122,7 @@ export default function Sidebar() {
         </div>
       )}
 
-      {!collapsed && (
-        <div style={{
-          padding: "14px 18px",
-          borderTop: "1px solid rgba(99,179,237,0.07)",
-        }}>
-          <div style={{ fontSize: 10, color: "#334155", letterSpacing: "0.05em" }}>
-            AI JOB APPLICATION AGENT
-          </div>
-        </div>
-      )}
+      <UserMenu collapsed={collapsed} />
     </aside>
   );
 }
