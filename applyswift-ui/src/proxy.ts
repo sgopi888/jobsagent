@@ -16,6 +16,14 @@ export function proxy(request: NextRequest) {
   // Check for session cookie
   const session = request.cookies.get("session");
   if (!session?.value) {
+    // API routes: return 401 JSON so fetch() callers don't get HTML
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "not_logged_in" },
+        { status: 401 }
+      );
+    }
+    // Page routes: redirect to landing
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.searchParams.set("auth_error", "not_logged_in");
