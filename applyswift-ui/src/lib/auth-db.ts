@@ -127,12 +127,16 @@ export function createOAuthState(): string {
   // Clean up old states (> 10 min)
   db.prepare("DELETE FROM oauth_state WHERE created_at < ?").run(now - 600);
   db.prepare("INSERT INTO oauth_state (state, created_at) VALUES (?, ?)").run(state, now);
+  console.log("[createOAuthState] created state:", state, "at:", now, "db path:", AUTH_DB_PATH);
   return state;
 }
 
 export function verifyOAuthState(state: string): boolean {
   const db = getAuthDb();
   const now = Math.floor(Date.now() / 1000);
+  console.log("[verifyOAuthState] looking for state:", state, "now:", now, "cutoff:", now - 600);
+  const allStates = db.prepare("SELECT * FROM oauth_state").all();
+  console.log("[verifyOAuthState] all states in DB:", JSON.stringify(allStates));
   const row = db.prepare("SELECT * FROM oauth_state WHERE state = ? AND created_at > ?")
     .get(state, now - 600);
   if (row) {

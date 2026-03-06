@@ -24,7 +24,10 @@ export async function GET(req: NextRequest) {
   }
 
   // Verify CSRF state
-  if (!verifyOAuthState(state)) {
+  console.log("[auth/callback] state from Google:", state);
+  const stateValid = verifyOAuthState(state);
+  console.log("[auth/callback] verifyOAuthState result:", stateValid);
+  if (!stateValid) {
     return NextResponse.redirect(`${appUrl}/?auth_error=invalid_state`);
   }
 
